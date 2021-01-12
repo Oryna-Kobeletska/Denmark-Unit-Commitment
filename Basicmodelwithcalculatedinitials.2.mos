@@ -1,0 +1,442 @@
+model BasicModel
+  uses "mmxprs"
+  uses "mmsystem"
+
+declarations
+  NumTimePeriodsPerHour = 1
+  NumHours = 24
+  NumTimePeriods = NumTimePeriodsPerHour*NumHours
+  PrintSet: list of integer
+  TimePeriods = 1..NumTimePeriods
+  Hours = 1..NumHours
+  GeneratorNames: set of string
+  GeneratorTypes: array(GeneratorNames) of string
+  Demand: array(Hours) of real
+  NewDemand:  array(TimePeriods) of real
+  Reserve: array(Hours) of real
+  NewReserve:  array(TimePeriods) of real
+  GeneratorCosts: array(GeneratorNames) of real
+  GeneratorStartUpCost: array(GeneratorNames) of real
+  GeneratorMaxProduction: array(GeneratorNames) of real
+  GeneratorMinProduction: array(GeneratorNames) of real
+  MaxRampDownRate: array(GeneratorNames) of real
+  MaxRampUpRate: array(GeneratorNames) of real
+  MaxShutDownRate: array(GeneratorNames) of real
+  MaxStartUpRate: array(GeneratorNames) of real
+  MinUpTime: array(GeneratorNames) of integer
+  MinDownTime: array(GeneratorNames) of integer
+  InitialState: array(GeneratorNames) of integer
+  InitialProduction: array(GeneratorNames) of real
+  InitialMinUpTime: array(GeneratorNames) of integer
+  InitialMinDownTime: array(GeneratorNames) of integer
+  GeneratorStates: array(GeneratorNames, TimePeriods) of mpvar
+  GeneratorStarts: array(GeneratorNames, TimePeriods) of mpvar
+  GeneratorShuts: array(GeneratorNames, TimePeriods) of mpvar
+  Production: array(GeneratorNames, TimePeriods) of mpvar
+  MaxProductionPossible: array(GeneratorNames, TimePeriods) of mpvar
+end-declarations
+
+Initialisations := "n_equals_1.dat"
+
+initializations from Initialisations
+	GeneratorNames GeneratorTypes Demand Reserve GeneratorCosts GeneratorStartUpCost GeneratorMaxProduction GeneratorMinProduction MaxRampDownRate MaxRampUpRate
+	MaxShutDownRate MaxStartUpRate MinUpTime MinDownTime InitialState InitialProduction InitialMinUpTime InitialMinDownTime
+end-initializations
+
+if NumTimePeriodsPerHour = 1 then
+  forall(t in TimePeriods) do
+    NewDemand(t) := Demand(t)
+    NewReserve(t) := Reserve(t)
+  end-do
+  forall(g in GeneratorNames) do
+    NewGeneratorCosts(g) := GeneratorCosts(g)
+    NewMaxRampDownRate(g) := MaxRampDownRate(g)
+    NewMaxRampUpRate(g) := MaxRampUpRate(g)
+    NewMaxShutDownRate(g) := MaxShutDownRate(g)
+    NewMaxStartUpRate(g) := MaxStartUpRate(g)
+    NewMinUpTime(g) := MinUpTime(g)
+    NewMinDownTime(g) := MinDownTime(g)
+  end-do
+else
+  forall(i in Hours) do
+    forall(j in 1..NumTimePeriodsPerHour) do
+      NewDemand(NumTimePeriodsPerHour*(i-1)+j) := Demand(i)
+      NewReserve(NumTimePeriodsPerHour*(i-1)+j) := Reserve(i)
+    end-do
+  end-do
+  forall(g in GeneratorNames) do
+    NewGeneratorCosts(g) := GeneratorCosts(g)/NumTimePeriodsPerHour
+    NewMaxRampDownRate(g) := MaxRampDownRate(g)/NumTimePeriodsPerHour
+    NewMaxRampUpRate(g) := MaxRampUpRate(g)/NumTimePeriodsPerHour
+    NewMaxShutDownRate(g) := MaxShutDownRate(g)/NumTimePeriodsPerHour
+    NewMaxStartUpRate(g) := MaxStartUpRate(g)/NumTimePeriodsPerHour
+    NewMinUpTime(g) := MinUpTime(g)*NumTimePeriodsPerHour
+    NewMinDownTime(g) := MinDownTime(g)*NumTimePeriodsPerHour
+  end-do
+end-if              ! Changes to input - to make data accurate for the given number of time periods per hour.
+
+! Total cost objective function.
+TotalCost := sum(g in GeneratorNames, t in TimePeriods) (Production(g,t)*NewGeneratorCosts(g)+GeneratorStarts(g,t)*GeneratorStartUpCost(g))
+
+DoNot := "Ask me about this"
+if DoNot = "Ask me about this" then
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!                                                                                     Constraints                                                                                        !
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+forall(g in GeneratorNames, t in TimePeriods) do        ! Binary variables (section 2.2 in notes).
+  BinaryStateCS(g,t) := GeneratorStates(g, t) is_binary ! State binary variable (v_j in notes).
+  BinaryStartCS(g,t) := GeneratorStarts(g, t) is_binary ! Start binary variable (y_j in notes).
+  BinaryShutCS(g,t)  := GeneratorShuts(g, t) is_binary  ! Shut binary variable (z_j in notes).
+  if t=1 then
+	LogicalCS(g,t) := InitialState(g)-GeneratorStates(g,t)+GeneratorStarts(g,t)-GeneratorShuts(g,t)=0        ! Logical constraint for binary variables (constraint 2.5 in notes)
+	                                                                                                         ! involving initial states.
+  elif t>1 then
+	LogicalCS(g,t) := GeneratorStates(g,t-1)-GeneratorStates(g,t)+GeneratorStarts(g,t)-GeneratorShuts(g,t)=0 ! Logical constraint for binary variables (constraint 2.5 in notes).
+  end-if
+end-do
+
+forall(g in GeneratorNames, t in TimePeriods) do        ! Ramp up and down constraints (section 2.3 in notes).
+  if t=1 then
+	RampUpCS(g,t) := Production(g,t)-InitialProduction(g)   <= NewMaxRampUpRate(g)*InitialState(g)+NewMaxStartUpRate(g)*GeneratorStarts(g,t)         ! Ramp up constraint (constraint 2.7)
+	                                                                                                                                           ! involving initial states.
+	RampDownCS(g,t) := InitialProduction(g)-Production(g,t) <= NewMaxRampDownRate(g)*GeneratorStates(g,t)+NewMaxShutDownRate(g)*GeneratorShuts(g,t)  ! Ramp down constraint (constraint 2.8)
+	                                                                                                                                           ! involving initial states.
+  elif t>1 then
+    RampUpCS(g,t)  := Production(g,t)-Production(g,t-1) <= NewMaxRampUpRate(g)*GeneratorStates(g,t-1)+NewMaxStartUpRate(g)*GeneratorStarts(g,t)      ! Ramp up constraint (constraint 2.7).
+    RampDownCS(g,t) := Production(g,t-1)-Production(g,t) <= NewMaxRampDownRate(g)*GeneratorStates(g,t)+NewMaxShutDownRate(g)*GeneratorShuts(g,t)     ! Ramp down constraint (constraint 2.8).
+  end-if
+end-do
+
+forall(g in GeneratorNames) do                          ! Finds the first start and shut time (for use in section 2.4 of notes).
+  FirstStartTime(g) := minlist(NumTimePeriods,InitialMinDownTime(g))+1 ! Finds the first time period where generator g can start (D_j+1 in notes).
+  FirstShutTime(g)  := minlist(NumTimePeriods,InitialMinUpTime(g))+1   ! Finds the first time period where generator g can stut down (F_j+1 in notes).
+end-do
+
+forall(g in GeneratorNames) do                          ! Uptime and downtime constraints (section 2.4 in notes).
+
+  forall(t in TimePeriods) do                                             !! Create error message for possible constraint 2.9 assumption violation.
+    if t < FirstShutTime(g) then
+      writeln(25*"-")
+      writeln("ERROR: Initial minimum uptime > normal minimum uptime")      ! We create an error message for the case where initial minimum uptime is greater than
+      writeln(25*"-")                                                       ! normal minimum uptime because it violates our assumption that this doesn't happen.
+      break
+    end-if
+  end-do
+
+  forall(t in FirstShutTime(g)..NumTimePeriods) do                         !! Shutdown constraint (constraint 2.9 in the notes).
+    UpTimeSetFirstValue := t-NewMinUpTime(g)+1                              ! Find what the first k value in constraint 2.9 would be if we didn't require k>=1.
+    if UpTimeSetFirstValue >=1 then
+      UpTimeSet := UpTimeSetFirstValue..t                                   ! If the above value is already greater than or equal to 1, then we use it as the first k in our summation.
+    else
+      UpTimeSet := 1..t                                                     ! If it is not greater than or equal to 1 however, we use 1 as our starting k value in the summation.
+    end-if
+    MinUpTimeCS(g,t) := sum(k in UpTimeSet) (GeneratorStarts(g,k)) <= GeneratorStates(g,t)                     ! Constraint 2.9 in notes.
+  end-do
+
+  forall(t in TimePeriods) do                                              !! Create error message for possible constraint 2.10 assumption violation.
+    if t < FirstStartTime(g) then
+      writeln(25*"-")
+      writeln("ERROR: Initial minimum uptime > normal minimum uptime")      ! We create an error message for the case where initial minimum downtime is greater than
+      writeln(25*"-")                                                       ! normal minimum downtime because it violates our assumption that this doesn't happen.
+      break
+    end-if
+  end-do
+
+  forall(t in FirstStartTime(g)..NumTimePeriods) do                        !! Startup constraint (constraint 2.10 in the notes).
+    if (t >= FirstStartTime(g)) then
+      DownTimeSetFirstValue := t-NewMinDownTime(g)+1                           ! Find what the first k value in constraint 2.10 would be if we didn't require k>=1.
+      if DownTimeSetFirstValue >=1 then
+        DownTimeSet := DownTimeSetFirstValue..t                             ! If the above value is already greater than or equal to 1, then we use it as the first k in our summation.
+      else
+        DownTimeSet := 1..t                                                 ! If it is not greater than or equal to 1 however, we use 1 as our starting k value in the summation.
+      end-if
+      MinDownTimeCS(g,t) := GeneratorStates(g,t) + sum(k in DownTimeSet) (GeneratorShuts(g,k)) <= 1              ! Constraint 2.10 in notes.
+    end-if
+ end-do
+end-do
+
+forall(g in GeneratorNames, t in TimePeriods) do        ! Generation limit constarints (section 2.5 in notes).
+  if t=1 then
+  ! Constraint 2.12 in notes (intial).
+	MaxProductionPossibleCS1(g,t) := MaxProductionPossible(g,t) <= InitialProduction(g) + NewMaxRampUpRate(g)*InitialState(g) + NewMaxStartUpRate(g)*GeneratorStarts(g,t)
+  elif t>1 then
+  ! Constraint 2.12 in notes (main).
+    MaxProductionPossibleCS1(g,t) := MaxProductionPossible(g,t) <= Production(g,t-1) + NewMaxRampUpRate(g)*GeneratorStates(g,t-1) + NewMaxStartUpRate(g)*GeneratorStarts(g,t)
+  end-if
+  PossiblePowerOutputCS1(g,t) := Production(g,t) >= GeneratorStates(g,t)*GeneratorMinProduction(g)               ! Constraint 2.11 in notes (first inequality).
+  PossiblePowerOutputCS2(g,t) := Production(g,t) <= MaxProductionPossible(g,t)                                   ! Constraint 2.11 in notes (second inequality).
+  PossiblePowerOutputCS3(g,t) := MaxProductionPossible(g,t) <= GeneratorStates(g,t)*GeneratorMaxProduction(g)    ! Constraint 2.11 in notes (third inequality).
+  if t<6 then
+    ! Constraint 2.13 in notes.
+	  MaxProductionPossibleCS2(g,t) := MaxProductionPossible(g,t) <= GeneratorMaxProduction(g)*GeneratorStates(g,t)-GeneratorMaxProduction(g)*GeneratorShuts(g,t+1) + GeneratorShuts(g,t+1)*NewMaxShutDownRate(g)
+  end-if
+end-do
+
+forall(t in TimePeriods) DemandCS(t) := sum(g in GeneratorNames) Production(g,t) = NewDemand(t)                                ! Demand constraint.
+forall(t in TimePeriods) ReserveCS(t) := sum(g in GeneratorNames) MaxProductionPossible(g,t) >= NewDemand(t) + NewReserve(t)   ! Reserve constraint.
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+end-if            ! Constraints.
+
+minimise(TotalCost)                                     ! Optimise.
+
+IHope := "this works"
+if IHope = "this works" then
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!                                                                                    Display Output                                                                                      !
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  PrintSet := []                            ! We will only display every nth time period where n is the number of time periods in 1 hour. Here we create an empty list for the nth periods.
+  forall(t in TimePeriods) do
+  if t <= 24 then
+    PrintSet += [t*NumTimePeriodsPerHour]   ! Add every nth time period to the list.
+  else
+    break
+  end-if
+  end-do
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!      Production Level      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  !!! Column Headings !!!
+  forall(i in 1..2) do                                                                           ! There will be two tables with production values. Each table will have 12 time periods.
+    writeln("\nGenerator Production Levels\n", "~"*27)                                           ! Title.
+    writeln("Time Periods ", 12*(i-1)*NumTimePeriodsPerHour+1, "-",12*i*NumTimePeriodsPerHour)   ! State the range of time periods are included in the table below.
+    writeln
+    writeln(" "*15,strfmt("Time Period", 44))                                                    ! Main column heading.
+    write(strfmt("",10), "|")
+    forall(t in PrintSet) do                                                                     ! Loop over selected time periods (n, 2n, 3n ,...,24n).
+      if t<=12*i*NumTimePeriodsPerHour and t>12*(i-1)*NumTimePeriodsPerHour then                 ! Split the time periods into blocks of 12.
+        write(strfmt(t,7))                                                                       ! Display the time period numbers as minor column headings.
+      end-if
+    end-do
+    writeln("  |")
+    writeln("-"*98)
+
+    !!! Main Rows !!!
+    forall(g in GeneratorNames) do
+      write(" ",strfmt(g,-9), "|")                                                               ! Display generator names as row headings.
+      forall(t in PrintSet) do                                                                   ! Loop over selected time periods (n, 2n, 3n ,...,24n).
+        if t<=12*i*NumTimePeriodsPerHour and t>12*(i-1)*NumTimePeriodsPerHour then               ! Split the time periods into blocks of 12.
+          iflow:= integer(getsol(Production(g,t)))                                               ! Find the production value and turn it into an integer.
+          write(strfmt(iflow,7))                                                                 ! Display the production level.
+        end-if
+      end-do
+    writeln("  |")
+    end-do
+    writeln("-"*98)
+
+    !!! Total Production !!!
+    write(strfmt(" Total",-10), "|")                                                             ! Create a row heading for total production.
+    forall(t in PrintSet) do                                                                     ! Loop over selected time periods (n, 2n, 3n ,...,24n).
+      tsum(t) := integer(sum(g in GeneratorNames) Production(g,t).sol)                           ! Find the total production by all generators in the time period and change to integer.
+      if t<=12*i*NumTimePeriodsPerHour and t>12*(i-1)*NumTimePeriodsPerHour then                 ! Split the time periods into blocks of 12.
+        write(strfmt(tsum(t),7))                                                                 ! Display the total production for the given time period.
+      end-if
+    end-do
+    writeln("  |")
+
+    !!! Demand !!!
+    write(strfmt("Demand",-10), "|")                                                             ! Create a row heading for demand.
+    forall(t in PrintSet) do                                                                     ! Loop over selected time periods (n, 2n, 3n ,...,24n).
+      if t<=12*i*NumTimePeriodsPerHour and t>12*(i-1)*NumTimePeriodsPerHour then                 ! Split the time periods into blocks of 12.
+        write(strfmt(integer(NewDemand(t)),7))                                                   ! Display the demand for the given time period.
+      end-if
+    end-do
+    writeln("  |")
+    writeln
+  end-do
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!      Generator States      !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  !!! Column Headings !!!
+  forall(i in 1..3) do                                                                           ! There will be 3 tables with generation states. Each table will have 8 time periods.
+    writeln("\nLogical Generator States\n", "~"*27)                                              ! Title.
+    writeln("Time Periods ", 8*(i-1)*NumTimePeriodsPerHour+1, "-",8*i*NumTimePeriodsPerHour)     ! State the range of time periods are included in the table below.
+    writeln
+    writeln(" "*15,strfmt("Time Period", 44))                                                    ! Main column heading.
+    writeln("-"*97)
+    write(strfmt("",8), "|")
+    forall(t in PrintSet) do                                                                     ! Loop over selected time periods (n, 2n, 3n ,...,24n).
+      if t<=8*i*NumTimePeriodsPerHour and t>8*(i-1)*NumTimePeriodsPerHour then                   ! Split the time periods into blocks of 8.
+        write(strfmt(t,10),"|")                                                                  ! Display the time period numbers as normal column headings.
+      end-if
+    end-do
+    writeln
+    writeln("-"*97)
+    write(strfmt("",8), "|")
+    forall(t in PrintSet) do                                                                     ! Loop over selected time periods (n, 2n, 3n ,...,24n).
+      if t<=8*i*NumTimePeriodsPerHour and t>8*(i-1)*NumTimePeriodsPerHour then                   ! Split the time periods into blocks of 8.
+        write(strfmt("On",3),strfmt("St",3),strfmt("Sh",3)," |")                                 ! Create 3 more sub-column/ minor headings for each time period. These are for each of
+                                                                                                 ! the binary variables.
+      end-if
+    end-do
+    writeln
+
+    !!! Main Rows !!!
+    forall(g in GeneratorNames) do
+      write(strfmt(g,-8), "|")
+      forall(t in PrintSet) do                                                                   ! Loop over selected time periods (n, 2n, 3n ,...,24n).
+        if t<=8*i*NumTimePeriodsPerHour and t>8*(i-1)*NumTimePeriodsPerHour then                 ! Split the time periods into blocks of 8.
+          v_j:=integer(GeneratorStates(g,t).sol)                                                 ! Get the value of the 'state' binary variable.
+          y_j:=integer(GeneratorStarts(g,t).sol)                                                 ! Get the value of the 'start' binary variable.
+          z_j:=integer(GeneratorShuts(g,t).sol)                                                  ! Get the value of the 'shut' binary variable.
+          write(strfmt(v_j,3),strfmt(y_j,3),strfmt(z_j,3)," |")                                  ! Display the values of these three binary variables.
+        end-if
+      end-do
+      writeln
+    end-do
+
+  end-do
+
+  writeln
+  writeln("Total cost = £", ceil(getsol(TotalCost*100))/100)                                     ! Find and display the total cost (objective).
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+end-if                   ! Print section.
+
+csv := "lame"
+if csv = "lame" then
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!                                                                                    Output into csv                                                                                     !
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  fopen("n_equals_" + strfmt(NumTimePeriodsPerHour, 1) + "_Output.csv", F_OUTPUT)     ! Open/ create a csv file with the name being the name of this file plus "Output" at end.
+
+  ! Note: All data used for this model (all data in initialisations file) will be included for completeness.
+
+  write("NumTimePeriodsPerHour,",NumTimePeriodsPerHour)                               ! Number of time periods per hour.
+  writeln                                                                             ! Empty line
+
+  writeln
+  write("GeneratorNames")                                                             ! Generator names.
+  forall(g in GeneratorNames) write(",", g)
+
+  writeln
+  write("GeneratorTypes")                                                             ! Generator types.
+  forall(g in GeneratorNames) write(",", GeneratorTypes(g))
+
+  writeln
+  write("GeneratorCosts")                                                             ! Generator costs.
+  forall(g in GeneratorNames) write(",", GeneratorCosts(g))
+
+  writeln
+  write("GeneratorStartUpCost")                                                       ! Generator start up costs.
+  forall(g in GeneratorNames) write(",", GeneratorStartUpCost(g))
+
+  writeln
+  write("GeneratorMaxProduction")                                                     ! Generator maximum production.
+  forall(g in GeneratorNames) write(",", GeneratorMaxProduction(g))
+
+  writeln
+  write("GeneratorMinProduction")                                                     ! Generator minimum production.
+  forall(g in GeneratorNames) write(",", GeneratorMinProduction(g))
+
+  writeln
+  write("MaxRampDownRate")                                                            ! Generator maximum ramp down rate.
+  forall(g in GeneratorNames) write(",", MaxRampDownRate(g))
+
+  writeln
+  write("MaxRampUpRate")                                                              ! Generator maximum ramp up rate.
+  forall(g in GeneratorNames) write(",", MaxRampUpRate(g))
+
+  writeln
+  write("MaxShutDownRate")                                                            ! Generator maximum shut down rate.
+  forall(g in GeneratorNames) write(",", MaxShutDownRate(g))
+
+  writeln
+  write("MaxStartUpRate")                                                             ! Generator maximum start up rate.
+  forall(g in GeneratorNames) write(",", MaxStartUpRate(g))
+
+  writeln
+  write("MinUpTime")                                                                  ! Generator minimum up time.
+  forall(g in GeneratorNames) write(",", MinUpTime(g))
+
+  writeln
+  write("MinDownTime")                                                                ! Generator minimum down time.
+  forall(g in GeneratorNames) write(",", MinDownTime(g))
+
+  writeln
+  write("InitialState")                                                               ! Generator initial state.
+  forall(g in GeneratorNames) write(",", InitialState(g))
+
+  writeln
+  write("InitialProduction")                                                          ! Generator initial production.
+  forall(g in GeneratorNames) write(",", InitialProduction(g))
+
+  writeln
+  write("InitialMinUpTime")                                                           ! Generator initial minimum up time.
+  forall(g in GeneratorNames) write(",", InitialMinUpTime(g))
+
+  writeln
+  write("InitialMinDownTime")                                                         ! Generator initial minimum down time.
+  forall(g in GeneratorNames) write(",", InitialMinDownTime(g))
+  writeln
+
+  writeln
+  write("TimePeriods")                                                                ! Time periods.
+  forall(t in TimePeriods) write(",", t)
+
+  writeln
+  write("Demand")                                                                     ! Demand for time periods.
+  forall(t in TimePeriods) write(",", NewDemand(t))
+
+  writeln
+  write("Reserve")                                                                    ! Reserves required for time periods.
+  forall(t in TimePeriods) write(",", NewReserve(t))
+  writeln
+
+  forall(g in GeneratorNames) do                                                      ! Loop over generators.
+    writeln
+    write("GeneratorStates-",g)                                                       ! State generator name as row heading along with "GeneratorStates".
+    forall(t in TimePeriods) write(",", getsol(GeneratorStates(g,t)))                 ! Generator 'state' binary variable values for each time period and generator.
+  end-do
+  writeln
+
+  forall(g in GeneratorNames) do                                                      ! Loop over generators.
+    writeln
+    write("GeneratorStarts-",g)                                                       ! State generator name as row heading along with "GeneratorStarts".
+    forall(t in TimePeriods) write(",", getsol(GeneratorStarts(g,t)))                 ! Generator 'start' binary variable values for each time period and generator.
+  end-do
+  writeln
+
+  forall(g in GeneratorNames) do                                                      ! Loop over generators.
+    writeln
+    write("GeneratorShuts-",g)                                                        ! State generator name as row heading along with "GeneratorShuts".
+    forall(t in TimePeriods) write(",", getsol(GeneratorShuts(g,t)))                  ! Generator 'shut' binary variable values for each time period and generator.
+  end-do
+  writeln
+
+  forall(g in GeneratorNames) do                                                      ! Loop over generators.
+    writeln
+    write("Production-",g)                                                            ! State generator name as row heading along with "Production".
+    forall(t in TimePeriods) write(",", getsol(Production(g,t)))                      ! Generator production level for each time period and generator.
+  end-do
+  writeln
+
+  forall(g in GeneratorNames) do                                                      ! Loop over generators.
+    writeln
+    write("MaxProductionPossible-",g)                                                 ! State generator name as row heading along with "MaxProductionPossible".
+    forall(t in TimePeriods) write(",", getsol(MaxProductionPossible(g,t)))           ! Generator maximum possible production for each time period and generator.
+  end-do
+  writeln
+
+  fclose(F_OUTPUT)                                                                    ! Close the csv file.
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+end-if
+
+
+! Output to csv.
+
+end-model
