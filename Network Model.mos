@@ -25,12 +25,14 @@ declarations
 
   Nodes: set of integer
   Demand: array(Nodes,TimePeriods) of real
-  Transmissioncapacities: array(Nodes, Nodes) of real
+  TransmissionCapacities: array(Nodes, Nodes) of real
   SeriesSusceptance: array(Nodes, Nodes) of real
-  Generators: set of integer
-  GeneratorNodes: array(Nodes) of integer
+  GeneratorNodes_2: array(Nodes) of real
+
+  GeneratorNodes: array(Nodes,GeneratorNames) of integer
 
   VoltageAngle: array(Nodes, TimePeriods) of mpvar
+
 
   GeneratorStates: array(GeneratorNames, TimePeriods) of mpvar
   GeneratorStarts: array(GeneratorNames, TimePeriods) of mpvar
@@ -40,8 +42,8 @@ declarations
 end-declarations
 
 initializations from "Network Data.dat"
-	GeneratorNames GeneratorTypes Generators TimePeriods Demand Reserve GeneratorCosts GeneratorStartUpCost GeneratorMaxProduction GeneratorMinProduction MaxRampDownRate MaxRampUpRate
-	MaxShutDownRate MaxStartUpRate MinUpTime MinDownTime InitialState InitialProduction InitialMinUpTime InitialMinDownTime NumTimePeriods Transmissioncapacities SeriesSusceptance Nodes GeneratorNodes
+	GeneratorNames GeneratorTypes GeneratorNodes_2 TimePeriods Demand Reserve GeneratorCosts GeneratorStartUpCost GeneratorMaxProduction GeneratorMinProduction MaxRampDownRate MaxRampUpRate
+	MaxShutDownRate MaxStartUpRate MinUpTime MinDownTime InitialState InitialProduction InitialMinUpTime InitialMinDownTime NumTimePeriods TransmissionCapacities SeriesSusceptance Nodes GeneratorNodes
 end-initializations
 
 TotalCost := sum(g in GeneratorNames, t in TimePeriods) (Production(g,t)*GeneratorCosts(g)+GeneratorStarts(g,t)*GeneratorStartUpCost(g)) ! Total cost objective function.
@@ -131,28 +133,35 @@ forall(g in GeneratorNames, t in TimePeriods) do        ! Generation limit const
   end-if
 end-do
 
-
-!Network Constraints
-
+forall(t in TimePeriods) DemandCS(t) := sum(g in GeneratorNames) Production(g,t) >= sum(n in Nodes)Demand(n,t)                             ! Demand constraint.
+!forall(t in TimePeriods) ReserveCS(t) := sum(g in GeneratorNames) MaxProductionPossible(g,t) >= Demand(t) + Reserve(t)   ! Reserve constraint.
 forall(n in Nodes, t in TimePeriods) do
-  if not GeneratorNodes(n) = 0 then
-    PowerBalanceCS(n,t) := sum(m in Nodes)(SeriesSusceptance(n,m)*(VoltageAngle(n,t)-VoltageAngle(m,t))) = Production(GeneratorNames(n),t) - Demand(n,t)
+  if not GeneratorNodes_2(n) = 0 then
+    PowerBalanceCS(n,t) := sum(m in Nodes) SeriesSusceptance(n,m)*(VoltageAngle(n,t)-VoltageAngle(m,t)) = Production(GeneratorNames(n),t) - Demand(n,t)
   else
-    PowerBalanceCS(n,t) := sum(m in Nodes)(SeriesSusceptance(n,m)*(VoltageAngle(n,t)-VoltageAngle(m,t))) = 0 - Demand(n,t)
+    PowerBalanceCS(n,t) := sum(m in Nodes) SeriesSusceptance(n,m)*(VoltageAngle(n,t)-VoltageAngle(m,t)) = 0 - Demand(n,t)
   end-if
 end-do
 
-forall(n in Nodes, m in Nodes, t in TimePeriods) do
-  TransmissioncapacityCS1(n,m,t):= -Transmissioncapacities(n,m) <= SeriesSusceptance(n,m)*(VoltageAngle(n,t)-VoltageAngle(m,t))
-  TransmissioncapacityCS2(n,m,t):= SeriesSusceptance(n,m)*(VoltageAngle(n,t)-VoltageAngle(m,t)) <= Transmissioncapacities(n,m)
-end-do
+!forall(n in Nodes, g in GeneratorNames, t in TimePeriods) do
+!    PowerBalanceCS(n,g,t) := sum(m in Nodes) 0.8*(VoltageAngle(n,t)-VoltageAngle(m,t)) = GeneratorNodes(n,g)*Production(g,t) - Demand(n,t)
+!end-do
 
+forall(n in Nodes, m in Nodes, t in TimePeriods) do
+  TransmissioncapacityPosCS(n,m,t):= 0.8*(VoltageAngle(n,t)-VoltageAngle(m,t)) <=100
+  TransmissioncapacityNegCS(n,m,t):=-100 <= 0.8*(VoltageAngle(n,t)-VoltageAngle(m,t))
+end-do
+forall(t in TimePeriods) do
+    NetworkReserveCS(t) := sum(g in GeneratorNames)MaxProductionPossible(g,t) >= sum(m in Nodes)(Demand(m,t))
+end-do
 !forall(t in TimePeriods) ReferenceAngleCS(t) := VoltageAngle(1,t) = 0
 
-forall(t in TimePeriods) do
-    NetworkReserveCS(t) := sum(n in Generators)MaxProductionPossible(GeneratorNames(n),t) >= sum(m in Nodes)(Demand(m,t)) + Reserve(t)
-end-do
-
+!forall(n in Nodes, t in TimePeriods) do
+ ! if n <= NumGenerators then
+  !  NetworkReserveCS(n,t) := MaxProductionPossible(n,t) >= Demand(n,t) + Reserve(t)
+ ! else
+  !  NetworkReserveCS(n,t) := 0 >= Demand(n,t) + Reserve(t)
+!end-do
 
 minimise(TotalCost)   ! Optimise.
 
@@ -184,9 +193,9 @@ minimise(TotalCost)   ! Optimise.
  forall(t in TimePeriods) write(strfmt(tsum(t),9))
  writeln("  |")
                                     ! ...demand of every region
-! write(strfmt("Demand",-15), "|")
-! forall(t in TimePeriods) write(strfmt(integer(Demand(t)),9))
-! writeln("  |")
+ write(strfmt("Demand",-15), "|")
+ forall(n in Nodes, t in TimePeriods) write(strfmt(integer(Demand(n,t)),9))
+ writeln("  |")
 
 writeln
 
@@ -216,8 +225,12 @@ writeln
  end-do
                                     ! ...the column totals
 
- writeln("\nPower Flow in t = 1\n", "~"*27)
 
+writeln
+writeln("Total cost = £", getsol(TotalCost))
+
+writeln("\nPower Flow in t = 1\n", "~"*27)
+ 
  writeln(strfmt("m", 40))
  write(strfmt(" ",5))
  forall(m in Nodes) write(strfmt(m,10), "|")
@@ -228,8 +241,4 @@ writeln
     write("n = ",n)
     forall(m in Nodes) write(strfmt(VoltageAngle(n,1).sol - VoltageAngle(m,1).sol,10),"|")
   end-do
-
-writeln
-writeln("Total cost = £", getsol(TotalCost))
-
 end-model
