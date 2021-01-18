@@ -1,0 +1,222 @@
+model BasicModel
+  uses "mmxprs"
+  uses "mmsystem"
+
+declarations
+  NumTimePeriods: integer
+  GeneratorNames: set of string
+  GeneratorTypes: array(GeneratorNames) of string
+  TimePeriods: set of integer
+  Reserve: array(TimePeriods) of integer
+  GeneratorCosts: array(GeneratorNames) of integer
+  GeneratorStartUpCost: array(GeneratorNames) of integer
+  GeneratorMaxProduction: array(GeneratorNames) of integer
+  GeneratorMinProduction: array(GeneratorNames) of integer
+  MaxRampDownRate: array(GeneratorNames) of integer
+  MaxRampUpRate: array(GeneratorNames) of integer
+  MaxShutDownRate: array(GeneratorNames) of integer
+  MaxStartUpRate: array(GeneratorNames) of integer
+  MinUpTime: array(GeneratorNames) of integer
+  MinDownTime: array(GeneratorNames) of integer
+  InitialState: array(GeneratorNames) of integer
+  InitialProduction: array(GeneratorNames) of integer
+  InitialMinUpTime: array(GeneratorNames) of integer
+  InitialMinDownTime: array(GeneratorNames) of integer
+  
+  Nodes: set of integer
+  Demand: array(Nodes,TimePeriods) of real
+  Transmissioncapacities: array(Nodes, Nodes) of real
+  SeriesSusceptance: array(Nodes, Nodes) of real
+  Generators: set of integer
+  GeneratorNodes: array(Nodes) of string
+
+  VoltageAngle: array(Nodes, TimePeriods) of mpvar
+
+  
+  GeneratorStates: array(GeneratorNames, TimePeriods) of mpvar
+  GeneratorStarts: array(GeneratorNames, TimePeriods) of mpvar
+  GeneratorShuts: array(GeneratorNames, TimePeriods) of mpvar
+  Production: array(GeneratorNames, TimePeriods) of mpvar
+  MaxProductionPossible: array(GeneratorNames, TimePeriods) of mpvar
+end-declarations
+
+initializations from "Network Data.dat"
+	GeneratorNames GeneratorTypes Generators TimePeriods Demand Reserve GeneratorCosts GeneratorStartUpCost GeneratorMaxProduction GeneratorMinProduction MaxRampDownRate MaxRampUpRate
+	MaxShutDownRate MaxStartUpRate MinUpTime MinDownTime InitialState InitialProduction InitialMinUpTime InitialMinDownTime NumTimePeriods Transmissioncapacities SeriesSusceptance Nodes GeneratorNodes
+end-initializations
+
+TotalCost := sum(g in GeneratorNames, t in TimePeriods) (Production(g,t)*GeneratorCosts(g)+GeneratorStarts(g,t)*GeneratorStartUpCost(g)) ! Total cost objective function.
+
+forall(g in GeneratorNames, t in TimePeriods) do        ! Binary variables (section 2.2 in notes).
+  BinaryStateCS(g,t) := GeneratorStates(g, t) is_binary ! State binary variable (v_j in notes).
+  BinaryStartCS(g,t) := GeneratorStarts(g, t) is_binary ! Start binary variable (y_j in notes).
+  BinaryShutCS(g,t)  := GeneratorShuts(g, t) is_binary  ! Shut binary variable (z_j in notes).
+  if t=1 then
+	LogicalCS(g,t) := InitialState(g)-GeneratorStates(g,t)+GeneratorStarts(g,t)-GeneratorShuts(g,t)=0        ! Logical constraint for binary variables (constraint 2.5 in notes) 
+	                                                                                                         ! involving initial states.
+  elif t>1 then
+	LogicalCS(g,t) := GeneratorStates(g,t-1)-GeneratorStates(g,t)+GeneratorStarts(g,t)-GeneratorShuts(g,t)=0 ! Logical constraint for binary variables (constraint 2.5 in notes).
+  end-if
+end-do
+
+forall(g in GeneratorNames, t in TimePeriods) do        ! Ramp up and down constraints (section 2.3 in notes).
+  if t=1 then
+	RampUpCS(g,t) := Production(g,t)-InitialProduction(g)   <= MaxRampUpRate(g)*InitialState(g)+MaxStartUpRate(g)*GeneratorStarts(g,t)         ! Ramp up constraint (constraint 2.7)
+	                                                                                                                                           ! involving initial states.
+	RampDownCS(g,t) := InitialProduction(g)-Production(g,t) <= MaxRampDownRate(g)*GeneratorStates(g,t)+MaxShutDownRate(g)*GeneratorShuts(g,t)  ! Ramp down constraint (constraint 2.8)
+	                                                                                                                                           ! involving initial states.
+  elif t>1 then
+    RampUpCS(g,t)  := Production(g,t)-Production(g,t-1) <= MaxRampUpRate(g)*GeneratorStates(g,t-1)+MaxStartUpRate(g)*GeneratorStarts(g,t)      ! Ramp up constraint (constraint 2.7).
+    RampDownCS(g,t) := Production(g,t-1)-Production(g,t) <= MaxRampDownRate(g)*GeneratorStates(g,t)+MaxShutDownRate(g)*GeneratorShuts(g,t)     ! Ramp down constraint (constraint 2.8).
+  end-if
+end-do
+
+forall(g in GeneratorNames) do                          ! Finds the first start and shut time (for use in section 2.4 of notes).
+  FirstStartTime(g) := minlist(NumTimePeriods,InitialMinDownTime(g))+1 ! Finds the first time period where generator g can start (D_j+1 in notes).
+  FirstShutTime(g)  := minlist(NumTimePeriods,InitialMinUpTime(g))+1   ! Finds the first time period where generator g can stut down (F_j+1 in notes).
+end-do
+
+forall(g in GeneratorNames) do                          ! Uptime and downtime constraints (section 2.4 in notes).
+
+  forall(t in TimePeriods) do                                              !! First shutdown constraint (extra).
+    if t < FirstShutTime(g) then
+      FirstShutCS(g,t) := GeneratorShuts(g,t)=0                             ! We create an extra shutdown constraint. This is for the case where initial minimum uptime is greater than
+    end-if                                                                  ! normal minimum uptime.
+  end-do
+
+  forall(t in FirstShutTime(g)..NumTimePeriods) do                         !! Second shutdown constraint (main). This is constraint 2.9 in the notes.
+    if (t >= FirstShutTime(g)) then
+      UpTimeSetFirstValue := t-MinUpTime(g)+1                               ! Find what the first k value in constraint 2.9 would be if we didn't require k>=1.
+      if UpTimeSetFirstValue >=1 then
+        UpTimeSet := UpTimeSetFirstValue..t                                 ! If the above value is already greater than or equal to 1, then we use it as the first k in our summation.
+      else
+        UpTimeSet := 1..t                                                   ! If it is not greater than or equal to 1 however, we use 1 as our starting k value in the summation.
+      end-if
+      MinUpTimeCS(g,t) := sum(k in UpTimeSet) (GeneratorStarts(g,k)) <= GeneratorStates(g,t)                     ! Constraint 2.9 in notes.
+    end-if
+  end-do
+
+  forall(t in TimePeriods) do                                              !! First startup constraint (extra).
+    if t < FirstStartTime(g) then
+      FirstStartCS(g,t) := GeneratorStarts(g,t)=0                           ! We create an extra startup constraint. This is for the case where initial minimum downtime is greater than
+    end-if                                                                  ! normal downtime (e.g if we decide to keep the generator off longer at start of day for maintenance).
+  end-do
+
+  forall(t in FirstStartTime(g)..NumTimePeriods) do                        !! Second starup constraint (main). This is constraint 2.10 in the notes.
+    if (t >= FirstStartTime(g)) then
+      DownTimeSetFirstValue := t-MinDownTime(g)+1                           ! Find what the first k value in constraint 2.10 would be if we didn't require k>=1.
+      if DownTimeSetFirstValue >=1 then
+        DownTimeSet := DownTimeSetFirstValue..t                             ! If the above value is already greater than or equal to 1, then we use it as the first k in our summation.
+      else
+        DownTimeSet := 1..t                                                 ! If it is not greater than or equal to 1 however, we use 1 as our starting k value in the summation.
+      end-if
+      MinDownTimeCS(g,t) := GeneratorStates(g,t) + sum(k in DownTimeSet) (GeneratorShuts(g,k)) <= 1              ! Constraint 2.10 in notes.
+    end-if
+ end-do
+end-do
+
+forall(g in GeneratorNames, t in TimePeriods) do        ! Generation limit constarints (section 2.5 in notes).
+  if t=1 then
+  ! Constraint 2.12 in notes (intial).
+	MaxProductionPossibleCS1(g,t) := MaxProductionPossible(g,t) <= InitialProduction(g) + MaxRampUpRate(g)*InitialState(g) + MaxStartUpRate(g)*GeneratorStarts(g,t)
+  elif t>1 then
+  ! Constraint 2.12 in notes (main).
+    MaxProductionPossibleCS1(g,t) := MaxProductionPossible(g,t) <= Production(g,t-1) + MaxRampUpRate(g)*GeneratorStates(g,t-1) + MaxStartUpRate(g)*GeneratorStarts(g,t)
+  end-if
+  PossiblePowerOutputCS1(g,t) := Production(g,t) >= GeneratorStates(g,t)*GeneratorMinProduction(g)               ! Constraint 2.11 in notes (first inequality).
+  PossiblePowerOutputCS2(g,t) := Production(g,t) <= MaxProductionPossible(g,t)                                   ! Constraint 2.11 in notes (second inequality).
+  PossiblePowerOutputCS3(g,t) := MaxProductionPossible(g,t) <= GeneratorStates(g,t)*GeneratorMaxProduction(g)    ! Constraint 2.11 in notes (third inequality).
+  if t<6 then
+  ! Constraint 2.13 in notes.
+	    MaxProductionPossibleCS2(g,t) := MaxProductionPossible(g,t) <= GeneratorMaxProduction(g)*GeneratorStates(g,t)-GeneratorMaxProduction(g)*GeneratorShuts(g,t+1) + GeneratorShuts(g,t+1)*MaxShutDownRate(g)
+  end-if
+end-do
+
+!forall(t in TimePeriods) DemandCS(t) := sum(g in GeneratorNames) Production(g,t) = Demand(t)                             ! Demand constraint.
+!forall(t in TimePeriods) ReserveCS(t) := sum(g in GeneratorNames) MaxProductionPossible(g,t) >= Demand(t) + Reserve(t)   ! Reserve constraint.
+
+forall(n in GeneratorNodes, t in TimePeriods) do
+  if not n = 0 then
+    PowerBalanceCS(n,t) := sum(m in Nodes) SeriesSusceptance(n,m)*(VoltageAngle(n,t)-VoltageAngle(m,t)) = Production(n,t) - Demand(n,t)
+  else
+    PowerBalanceCS(n,t) := sum(m in Nodes) SeriesSusceptance(n,m)*(VoltageAngle(n,t)-VoltageAngle(m,t)) = 0 - Demand(n,t)
+end-do
+
+forall(n in Nodes, m in Nodes, t in TimePeriods) TransmissioncapacityCS:= -Transmissioncapacities(n,m) <= SeriesSusceptance(n,m)*(VoltageAngle(n,t)-VoltageAngle(m,t)) <=Transmissioncapacities(n,m)
+
+forall(t in TimePeriods) ReferenceAngleCS(t) := VoltageAngle(1,t) = 0
+
+!forall(n in Nodes, t in TimePeriods) do
+ ! if n <= NumGenerators then
+  !  NetworkReserveCS(n,t) := MaxProductionPossible(n,t) >= Demand(n,t) + Reserve(t)
+ ! else
+  !  NetworkReserveCS(n,t) := 0 >= Demand(n,t) + Reserve(t)
+!end-do
+
+minimise(TotalCost)   ! Optimise.
+
+
+                                   ! Print solution (product flows) as table
+                                   ! ...heading and first line of the table
+ writeln("\nGenerator Production Levels\n", "~"*27)
+ writeln(strfmt("Time Period", 48))
+ write(strfmt("",15), "| ")
+ forall(t in TimePeriods) write(strfmt(t,9))
+ writeln(" |")
+ writeln("-"*73)
+                                   ! ...solution values of the flow variables
+                                   ! ...calculate totals per region / plant
+
+ forall(g in GeneratorNames) do
+   write("       ", strfmt(g,-8), "|")
+   psum:=0
+   forall(t in TimePeriods) do
+     iflow:=integer(Production(g,t).sol)
+     tsum(t) += iflow
+     write(strfmt(iflow,9))
+   end-do
+   writeln("  |")
+ end-do
+                                    ! ...the column totals
+ writeln("-"*73)
+ write(strfmt(" TOTAL",-15), "|")
+ forall(t in TimePeriods) write(strfmt(tsum(t),9))
+ writeln("  |")
+                                    ! ...demand of every region
+ write(strfmt("Demand",-15), "|")
+ forall(t in TimePeriods) write(strfmt(integer(Demand(t)),9))
+ writeln("  |")
+
+writeln
+
+                                   ! Print solution (product flows) as table:
+                                   ! ...heading and first line of the table
+ writeln("\nLogical Generator States\n", "~"*27)
+ writeln(strfmt("Time Period", 48))
+ write(strfmt("",15), "|")
+ forall(t in TimePeriods) write(strfmt(t,9),"|")
+ writeln
+ writeln("-"*73)
+ write(strfmt("",15), "|")
+ forall(t in TimePeriods) write(strfmt("On",3),strfmt("St",3),strfmt("Sh",3),"|")
+ writeln
+                                   ! ...solution values of the flow variables
+                                   ! ...calculate totals per region / plant
+
+ forall(g in GeneratorNames) do
+   write("       ", strfmt(g,-8), "|")
+   forall(t in TimePeriods) do
+     v_j:=integer(GeneratorStates(g,t).sol)
+     y_j:=integer(GeneratorStarts(g,t).sol)
+     z_j:=integer(GeneratorShuts(g,t).sol)
+     write(strfmt(v_j,3),strfmt(y_j,3),strfmt(z_j,3),"|")
+   end-do
+   writeln
+ end-do
+                                    ! ...the column totals
+
+
+writeln
+writeln("Total cost = £", getsol(TotalCost))
+
+end-model

@@ -1,0 +1,45 @@
+GeneratorNames: ["G1" "G2" "G3"]
+GeneratorTypes: ["Gas" "Wind" "Wind"]
+NumTimePeriods: 6
+Generators: [1 2 3]
+TimePeriods: [1 2 3 4 5 6]
+Reserve: [10 10 10 10 10 10]
+GeneratorCosts: [5 15 30]
+GeneratorStartUpCost: [800 500 250]
+GeneratorMaxProduction: [300 200 100]
+GeneratorMinProduction: [80 50 30]
+MaxRampDownRate: [30 40 50]
+MaxRampUpRate: [50 60 70]
+MaxShutDownRate: [80 50 30]
+MaxStartUpRate: [100 70 40]
+MinUpTime: [3 2 1]
+MinDownTime: [2 2 2]
+InitialState: [1 0 0]
+InitialProduction: [120 0 0]
+InitialMinUpTime: [2 0 0]
+InitialMinDownTime: [0 0 0]
+
+Nodes: [1 2 3 4 5 6]
+
+Transmissioncapacities: [0 0 0 100 100 100
+                          0 0 0 100 100 100
+                          0 0 0 0 100 100
+                          100 100 0 0 0 0
+                          100 100 100 0 0 0
+                          100 100 100 0 0 0]
+
+Demand: [0 0 0 0 0 0
+         0 0 0 0 0 0
+         0 0 0 0 0 0
+         100 100 80 140 100 80
+         90 100 80 30 90 60
+         50 50 40 0 40 50]
+
+SeriesSusceptance: [0 0 0 0.8 0.8 0.8
+                    0 0 0 0.8 0.8 0.8
+                    0 0 0 0 0.8 0.8
+                    0.8 0.8 0 0 0 0
+                    0.8 0.8 0.8 0 0 0
+                    0.8 0.8 0.8 0 0 0]
+
+GeneratorNodes: ["G1" "G2" "G3" 0 0 0]
