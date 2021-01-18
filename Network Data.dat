@@ -1,7 +1,7 @@
 GeneratorNames: ["G1" "G2" "G3"]
 GeneratorTypes: ["Gas" "Wind" "Wind"]
 NumTimePeriods: 6
-Generators: [1 2 3]
+
 TimePeriods: [1 2 3 4 5 6]
 Reserve: [10 10 10 10 10 10]
 GeneratorCosts: [5 15 30]
@@ -21,7 +21,7 @@ InitialMinDownTime: [0 0 0]
 
 Nodes: [1 2 3 4 5 6]
 
-Transmissioncapacities: [0 0 0 100 100 100
+TransmissionCapacities: [0 0 0 100 100 100
                           0 0 0 100 100 100
                           0 0 0 0 100 100
                           100 100 0 0 0 0
@@ -42,4 +42,9 @@ SeriesSusceptance: [0 0 0 0.8 0.8 0.8
                     0.8 0.8 0.8 0 0 0
                     0.8 0.8 0.8 0 0 0]
 
-GeneratorNodes: ["G1" "G2" "G3" 0 0 0]
+GeneratorNodes: [1 0 0
+                 0 1 0
+                 0 0 1
+                 0 0 0
+                 0 0 0
+                 0 0 0]
